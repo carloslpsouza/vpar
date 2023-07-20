@@ -1,195 +1,366 @@
-//-------------------------------------------------------------
-#define press_linha A0
-#define valvula_exalatoria   12
-#define valvula_inspiratoria 13
+#include <Wire.h>
+#include <LiquidCrystal.h>
+#include <Servo.h> 
+
+LiquidCrystal lcd(7, 6, 5, 4, 3, 2);
+
+Servo O2; //Oxigênio
+Servo AC; //Ar comprimido
+Servo TS; //Tubo de Saída
+
+#define     exa_valv  8
+#define     menu     13
+#define     enter    12
+#define     up       A0
+#define     down     A1
+#define     flux_o2  A2 // Recebe medição do fluxo de O2 que entra no blender
+#define     flux_ac  A3 // Recebe medição do fluxo de AC que entra no blender
+#define     flux_ts  A4 // Recebe medição do fluxo de saída para o paciente
+#define     pressostato A5 // Recebe medição de pressão da saida para o paciente
+#define     man_freq A6 // Ajuste manual da frequencia respiratoria 
+#define     man_fio2 A7 // Ajuste manual de concentração de O2
+  
+void monitorBtn();
+void modoEditavel();
+void upDown();
+void modoEditavelfloat();
+void upDownfloat();
+void listMenu();
+void selectMenu();
+void respirador();
+void monitPressao();
+
+int line[5] = {0,1,2,3,4}, line_bk[5], index, menuSelecionado = 1;
+int alarmeAtivo, up_flag, dw_flag, flag, menu_flag, enter_flag, menuPrincipal = 0;
+int pressaoAcima, pressaoAbaixo, falhaO2, falhaAc,falhaTs;
+float setvalfloat, setval1float;
 
 //-------------------------------------------------------------
-int valor_lido;
-int valor_set;
-int tolerancia;
 
-unsigned long  tempo_pico;
-unsigned long  inicio_tempo_pico;
-unsigned long  fim_tempo_pico;
+float   t_insp = 0.5; // Tempo Inspiratório (Segundos) de 0.5 a 3 segs
+int		p_insp = 20; // Pressão Inspiratoria (Mbar) de 0 a 40 mbar
+int     freq_resp = 15; // Ciclagem por tempo
+int     tpc = 0; // Divisão baseada na frequencia por minuto (tpc = tempo por ciclo)
+int		peep = 5; // PEEP (Mbar) de 0 a 20 mbar
+float   sens = 1; // Variação de pressão que indica que o paciente respondendo. de 0.5 a 3 mbar
+int     fio2 = 20; // Regulagem dos niveis de O2 de 21 a 100%
 
-int pressao_linha;
-int pressao_pico_set = 1000;
-int pressao_plato_set = 511;
-int pressao_peep_set = 102;
-int frequencia_respiratoria = 15;
-int tempo_por_ciclo = 60000 / frequencia_respiratoria;
-int tempo_desconto_tpico;
+int	mbar_limite = 500; // Valor maximo de segurança função erros() (Evitar Barotraumas)
+int	mbar_minimo = 100;  // Valor minimo de segurança função erros()
+int	fluxo_min_o2 = 1000; // Valor minimo fluxo oxigenio função erros()
+int	fluxo_min_ac = 1000; // Valor minimo fluxo ar comprimido função erros()
+int	fluxo_min_ts = 1000; // Valor minimo fluxo tubo de saida função erros()
+int pacienteRespondendo = 200; // Valor medido quando a pressão do TS sobe mesmo quanto tudo esta ok
+int press_max = 180; // Abertura da solenoide ao máximo
+int press_plato = 90; // Solenoide reduz volume
 
 //-------------------------------------------------------------
-
-int leituras = 1;
-int acumulador_leitura;
-int leitura;
-
-void pressaoLinha(){
-    pressao_linha = analogRead(press_linha);
+/*
+void trataFila(){
+  for (){
+  }
+}
+*/
+void showDisplay(char msg0[], char msg1[]){
+  lcd.setCursor(1,0);
+  lcd.print(msg0);
+  lcd.setCursor(1,1);
+  lcd.print(msg1);
+  delay(500);
 }
 
 //-------------------------------------------------------------
-
-
-int flutuador(int *valor_lido, int *valor_set, int tolerancia, int grandeza){ // grandeza 1 PICO, 2 PLATO, 3 PEEP
-  switch(grandeza){
-    case 1:
-      if(pressao_linha != pressao_pico_set){
-        pressaoLinha();
-        if(pressao_linha <= (pressao_linha + tolerancia) || pressao_linha >= (pressao_linha - tolerancia)){
-          break;
-        }
-        if(*valor_lido + tolerancia > *valor_set){
-          digitalWrite(valvula_exalatoria,  HIGH);
-          digitalWrite(valvula_inspiratoria, LOW);
-          delay(5);
-        }
-        if(*valor_lido + tolerancia < *valor_set){
-          digitalWrite(valvula_exalatoria,    LOW);
-          digitalWrite(valvula_inspiratoria, HIGH);
-          delay(5);
-        }
-      }
-    break;
-
-    case 2:
-      if(pressao_linha != pressao_plato_set){
-        pressaoLinha();
-        if(pressao_linha <= (pressao_linha + tolerancia) || pressao_linha >= (pressao_linha - tolerancia)){
-          break;
-        }
-        if(*valor_lido + tolerancia > *valor_set){
-          digitalWrite(valvula_exalatoria,  HIGH);
-          digitalWrite(valvula_inspiratoria, LOW);
-          delay(5);
-        }
-        if(*valor_lido + tolerancia < *valor_set){
-          digitalWrite(valvula_exalatoria,    LOW);
-          digitalWrite(valvula_inspiratoria, HIGH);
-          delay(5);
-        }
-      }
-    break;
-    
-    case 3:
-      if(pressao_linha != pressao_peep_set){
-        pressaoLinha();
-        if(pressao_linha <= (pressao_linha + tolerancia) || pressao_linha >= (pressao_linha - tolerancia)){
-          break;
-        }
-        if(*valor_lido + tolerancia > *valor_set){
-          digitalWrite(valvula_exalatoria,  HIGH);
-          digitalWrite(valvula_inspiratoria, LOW);
-          delay(5);
-        }
-        if(*valor_lido + tolerancia < *valor_set){
-          digitalWrite(valvula_exalatoria,    LOW);
-          digitalWrite(valvula_inspiratoria, HIGH);
-          delay(5);
-        }
-      }
-    break;
-
+void upDown(int *setval1){
+  if(!digitalRead(up)) up_flag = 1;
+  if(digitalRead(up) && up_flag){
+    up_flag = 0;
+    *setval1 += 1;
+  }
+  if (!digitalRead(down)) dw_flag = 1;
+  if (digitalRead(down) && dw_flag){
+    dw_flag = 0;
+    *setval1 -= 1;
   }
 }
 
-//-------------------------------------------------------------
-
-void pressaoPico(){
-  inicio_tempo_pico = millis();
-  while(pressao_linha < pressao_pico_set){
-    pressaoLinha();
-    digitalWrite(valvula_exalatoria,    LOW);
-    digitalWrite(valvula_inspiratoria, HIGH);
+void modoEditavel(int *setval){
+  lcd.setCursor(1,1);
+  lcd.print(*setval);
+  for(int i=0; i<=25; i+=1){
+    upDown(setval);
     delay(10);
-
-    flutuador(&pressao_linha, &pressao_pico_set, 100, 1);    
-
-    Serial.print("pico ");
-    Serial.println(pressao_linha);
-    delay(10);
-  }
-  fim_tempo_pico = millis();
-  tempo_pico = fim_tempo_pico - inicio_tempo_pico;
-  
-  if((tempo_por_ciclo - tempo_pico) > tempo_por_ciclo){ //segurana para evitar que o tpc - tp seja negativo
-    tempo_desconto_tpico = tempo_por_ciclo;
-  }
-  else{
-    tempo_desconto_tpico = tempo_por_ciclo - tempo_pico;
-  }
-  
-}
-
-void pressaoPlato(){
-  unsigned  long inicio_tempo_plato = millis();
-  if(pressao_linha > pressao_plato_set){
-    pressaoLinha();
-    digitalWrite(valvula_exalatoria,  HIGH);
-    digitalWrite(valvula_inspiratoria, LOW);
-  }
-  
-  for (int i = 1; i <= ((tempo_desconto_tpico/2) / 50); i ++){
-    
-    flutuador(&pressao_linha, &pressao_plato_set, 100, 2);    
-    
-    Serial.print(" T pico: ");
-    Serial.print(tempo_pico);
-    Serial.print(" T restante: ");
-    Serial.print(tempo_desconto_tpico);
-    Serial.print(" repetiçoes: ");
-    Serial.print((tempo_desconto_tpico/2) / 50);
-    //Serial.print(" plato ");
-    Serial.print(" P linha: ");
-    Serial.println(analogRead(press_linha));
-    delay(50);
-  }
-
-}
-
-void pressaoPeep(){
-  unsigned  long inicio_tempo_peep = millis();
-  if(pressao_linha > pressao_peep_set){
-    pressaoLinha();
-    digitalWrite(valvula_exalatoria,  HIGH);
-    digitalWrite(valvula_inspiratoria, LOW);
   }
  
-  for (int i = 1; i <= ((tempo_desconto_tpico/2) / 50); i ++){
-    
-    flutuador(&pressao_linha, &pressao_peep_set, 100, 3);    
-
-    Serial.print("PEEP: ");
-    Serial.print(" P linha: ");
-    Serial.println(pressao_linha);
-    delay(50);
+  lcd.setCursor(1,1);
+  lcd.print("               ");
+  for(int i=0; i<=25; i+=1){
+    upDown(setval);
+    delay(10);
   }
-
-  digitalWrite(valvula_exalatoria,  LOW);
-  tempo_pico = 0;// corrige trava em plato
-}
-
-void respirador(){
-  pressaoPico();
-  pressaoPlato();
-  pressaoPeep();
-  delay(100);
 }
 
 //-------------------------------------------------------------
 
-void setup(){
-  pinMode(valvula_exalatoria,   OUTPUT);
-  pinMode(valvula_inspiratoria, OUTPUT);
-  pinMode(press_linha, INPUT);
-  
-  Serial.begin(9600);
+void upDownfloat(float *setval1float){
+  if(!digitalRead(up)) up_flag = 1;
+  if(digitalRead(up) && up_flag){
+    up_flag = 0;
+    *setval1float += 0.5;
+  }
+  if (!digitalRead(down)) dw_flag = 1;
+  if (digitalRead(down) && dw_flag){
+    dw_flag = 0;
+    *setval1float -= 0.5;
+  }
 }
 
+void modoEditavelfloat(float *setvalfloat){
+  lcd.setCursor(1,1);
+  lcd.print(*setvalfloat);
+  for(int i=0; i<25; i+=1){
+    upDownfloat(setvalfloat);
+    delay(10);
+  }
+ 
+  lcd.setCursor(1,1);
+  lcd.print("               ");
+  for(int i=0; i<25; i+=1){
+    upDownfloat(setvalfloat);
+    delay(50);
+  }
+}
+
+//-------------------------------------------------------------
+
+void setup()
+{
+  Serial.begin(9600);
+  
+  pinMode(menu,  INPUT);
+  pinMode(enter, INPUT);
+  pinMode(up,    INPUT);
+  pinMode(down,  INPUT);
+  pinMode(flux_o2,     INPUT);
+  pinMode(flux_ac,     INPUT);
+  pinMode(flux_ts,     INPUT);
+  pinMode(pressostato, INPUT);
+  pinMode(man_freq,    INPUT);
+  pinMode(man_fio2,    INPUT);
+  pinMode(exa_valv,   OUTPUT);
+  
+  O2.attach(11);
+  AC.attach(10);
+  TS.attach(9);
+  
+  O2.write(0);
+  AC.write(0);
+  TS.write(0);
+  
+  tpc = 60 / freq_resp;
+  
+ lcd.begin (16,4);
+ lcd.setCursor(0,0);
+ lcd.print(">");
+   
+} //setup
+
+//-------------------------------------------------------------
+
 void loop(){
-  pressao_linha = analogRead(press_linha);
-  Serial.println(pressao_linha);
-  respirador();
+  
+  if(!menuPrincipal)
+  {
+    lcd.setCursor(1,line[0]);
+    lcd.print("1)T INSP (seg)");
+    lcd.setCursor(1,line[1]);
+    lcd.print("2)P INSP (mbar)");
+    lcd.setCursor(1,line[2]);
+    lcd.print("3)PEEP   (mbar)");
+    lcd.setCursor(1,line[3]);
+    lcd.print("4)SENSIB (mbar)");
+    lcd.setCursor(1,line[4]);
+    lcd.print("5) INICIAR     ");
+  }
+  
+
+  monitorBtn();
+  
+  Serial.print(analogRead(flux_o2));
+  Serial.print(" | ");
+  Serial.print(analogRead(flux_ac));
+  Serial.print(" | ");
+  Serial.print(analogRead(flux_ts));
+  Serial.print(" | ");
+  Serial.println(analogRead(pressostato));
+  
+}
+
+//-------------------------------------------------------------
+
+void monitorBtn(){
+   
+   if(!digitalRead(menu))  menu_flag  = 1;
+   if(digitalRead(menu) && menu_flag){
+       menu_flag = 0;
+       listMenu();
+       menuSelecionado += 1;
+       if(menuSelecionado > 5) menuSelecionado = 1;
+   }
+
+   if(!digitalRead(enter)) enter_flag = 1;
+   if(digitalRead(enter) && enter_flag){
+      enter_flag = 0; 
+      menuPrincipal = !menuPrincipal;
+      selectMenu();
+   }
+}
+
+void listMenu(){
+  for(int i=4; i>-1; i--){
+     index = i-1;
+     line_bk[i] = line[i];
+     
+     if(index < 0) line[i] = line_bk[i+4];
+     
+     else line[i] = line[i-1];
+  }
+}
+
+void selectMenu(){
+
+    switch(menuSelecionado) {
+       case 1: 
+      	       while(digitalRead(enter) && !enter_flag){
+                 modoEditavelfloat(&t_insp);
+                 //confTempinsp();
+               }
+               break;
+       case 2: 
+               while(digitalRead(enter) && !enter_flag){
+                 modoEditavel(&p_insp);
+                 //confPresinsp();
+               }
+               break;
+       case 3: 
+               while(digitalRead(enter) && !enter_flag){
+                 modoEditavel(&peep);
+                 //confPeep();
+               }
+               break;
+       case 4: 
+               while(digitalRead(enter) && !enter_flag){
+                 modoEditavelfloat(&sens);
+                 //confPeep();
+               }
+               break;
+       case 5: 
+      	       while(1 == 1){
+               	respirador(); 
+               }
+               break;
+      
+    }
+  
+ 
+}
+
+//-------------------------------------------------------------
+
+void respirador(){
+    AC.write(p_insp); // Valvula AC abre o valor da variavel p_insp
+    O2.write(man_fio2); // Valvula O2 abre o valor da variavel man_fio2 (Comparar o valor ajustado manual com valor de segurança)
+    
+    digitalWrite(exa_valv, LOW); // Fecha para pressurizar o circuito
+    TS.write(press_max); // Valvula que controla a saida começa e vai a pico
+    delay(((tpc/2) * 0.5) * 1000); // tpc / 2 considera dividir cada ciclo em inspiração e expiração
+    
+    TS.write(press_plato); // Valvula que controla a saida começa e vai a pico
+    delay(((tpc/2) * 0.5) * 1000); // Valvula que controla a saida sustenta pressão pelo tempo da variavel 
+    
+    digitalWrite(exa_valv, HIGH); // Abre para liberar os gases
+    TS.write(peep); // Sistema mantem pressão positiva no pulmão do paciente
+    delay((tpc/2) * 1000);
+    
+    lcd.setCursor(0,0);
+    lcd.print("TI:");
+    lcd.setCursor(3,0);
+    lcd.print(t_insp);
+    
+    lcd.setCursor(6,0);
+    lcd.print(" PI:");
+    lcd.setCursor(10,0);
+    lcd.print(p_insp);
+    
+    lcd.setCursor(0,1);
+    lcd.print("FO2:");
+    lcd.setCursor(4,1);
+    lcd.print(fio2);
+  
+    lcd.setCursor(6,1);
+    lcd.print(" PE:");
+    lcd.setCursor(10,1);
+    lcd.print("  ");
+    lcd.setCursor(10,1);
+    lcd.print(peep);
+  
+    lcd.setCursor(12,1);
+    lcd.print(" S:");
+    lcd.setCursor(15,1);
+    lcd.print(peep);
+  
+    erros();
+    delay(500);
+    pacienteAcordado();
+    Serial.print(analogRead(pressostato));
+  	Serial.print(" | ");
+  	Serial.println(alarmeAtivo);
+}
+
+void erros(){
+  if(analogRead(pressostato) > mbar_limite){
+    pressaoAcima = 1;
+    lcd.setCursor(1,0);
+    lcd.print("  FALHA GERAL  ");
+    lcd.setCursor(1,1);
+    lcd.print("PRESS ACIMA LIM");
+  }
+  if(analogRead(pressostato) < mbar_minimo){
+    pressaoAbaixo = 1;
+    lcd.setCursor(1,0);
+    lcd.print("  FALHA GERAL  ");
+    lcd.setCursor(1,1);
+    lcd.print("PRESS ABAIX LIM");
+  }
+  if (analogRead(flux_o2) < fluxo_min_o2){
+    falhaO2 = 1;
+    lcd.setCursor(1,0);
+    lcd.print("   FALHA!!!    ");
+    lcd.setCursor(1,1);
+    lcd.print("FLUXO OXIGENIO");
+  }
+  if (analogRead(flux_ac) < fluxo_min_ac){
+    falhaAc = 1;
+    lcd.setCursor(1,0);
+    lcd.print("   FALHA!!!    ");
+    lcd.setCursor(1,1);
+    lcd.print("FLUXO AR COMPRI");
+  }
+  if (analogRead(flux_ts) < fluxo_min_ts){
+    falhaTs = 1;
+    lcd.setCursor(1,0);
+    lcd.print("   FALHA!!!    ");
+    lcd.setCursor(1,1);
+    lcd.print(" FLUXO T SAIDA ");
+  }
+  alarmeAtivo = pressaoAcima + pressaoAbaixo + falhaO2 + falhaAc + falhaTs;
+}
+
+void pacienteAcordado(){
+  //tsterros = erros();
+  if(alarmeAtivo == 0 && analogRead(pressostato) > pacienteRespondendo){
+    lcd.setCursor(1,0);
+    lcd.print("    PACIENTE    ");
+    lcd.setCursor(1,1);
+    lcd.print("  RESPONDENDO ");
+  }
 }
