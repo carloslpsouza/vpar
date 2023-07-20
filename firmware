@@ -1,0 +1,195 @@
+//-------------------------------------------------------------
+#define press_linha A0
+#define valvula_exalatoria   12
+#define valvula_inspiratoria 13
+
+//-------------------------------------------------------------
+int valor_lido;
+int valor_set;
+int tolerancia;
+
+unsigned long  tempo_pico;
+unsigned long  inicio_tempo_pico;
+unsigned long  fim_tempo_pico;
+
+int pressao_linha;
+int pressao_pico_set = 1000;
+int pressao_plato_set = 511;
+int pressao_peep_set = 102;
+int frequencia_respiratoria = 15;
+int tempo_por_ciclo = 60000 / frequencia_respiratoria;
+int tempo_desconto_tpico;
+
+//-------------------------------------------------------------
+
+int leituras = 1;
+int acumulador_leitura;
+int leitura;
+
+void pressaoLinha(){
+    pressao_linha = analogRead(press_linha);
+}
+
+//-------------------------------------------------------------
+
+
+int flutuador(int *valor_lido, int *valor_set, int tolerancia, int grandeza){ // grandeza 1 PICO, 2 PLATO, 3 PEEP
+  switch(grandeza){
+    case 1:
+      if(pressao_linha != pressao_pico_set){
+        pressaoLinha();
+        if(pressao_linha <= (pressao_linha + tolerancia) || pressao_linha >= (pressao_linha - tolerancia)){
+          break;
+        }
+        if(*valor_lido + tolerancia > *valor_set){
+          digitalWrite(valvula_exalatoria,  HIGH);
+          digitalWrite(valvula_inspiratoria, LOW);
+          delay(5);
+        }
+        if(*valor_lido + tolerancia < *valor_set){
+          digitalWrite(valvula_exalatoria,    LOW);
+          digitalWrite(valvula_inspiratoria, HIGH);
+          delay(5);
+        }
+      }
+    break;
+
+    case 2:
+      if(pressao_linha != pressao_plato_set){
+        pressaoLinha();
+        if(pressao_linha <= (pressao_linha + tolerancia) || pressao_linha >= (pressao_linha - tolerancia)){
+          break;
+        }
+        if(*valor_lido + tolerancia > *valor_set){
+          digitalWrite(valvula_exalatoria,  HIGH);
+          digitalWrite(valvula_inspiratoria, LOW);
+          delay(5);
+        }
+        if(*valor_lido + tolerancia < *valor_set){
+          digitalWrite(valvula_exalatoria,    LOW);
+          digitalWrite(valvula_inspiratoria, HIGH);
+          delay(5);
+        }
+      }
+    break;
+    
+    case 3:
+      if(pressao_linha != pressao_peep_set){
+        pressaoLinha();
+        if(pressao_linha <= (pressao_linha + tolerancia) || pressao_linha >= (pressao_linha - tolerancia)){
+          break;
+        }
+        if(*valor_lido + tolerancia > *valor_set){
+          digitalWrite(valvula_exalatoria,  HIGH);
+          digitalWrite(valvula_inspiratoria, LOW);
+          delay(5);
+        }
+        if(*valor_lido + tolerancia < *valor_set){
+          digitalWrite(valvula_exalatoria,    LOW);
+          digitalWrite(valvula_inspiratoria, HIGH);
+          delay(5);
+        }
+      }
+    break;
+
+  }
+}
+
+//-------------------------------------------------------------
+
+void pressaoPico(){
+  inicio_tempo_pico = millis();
+  while(pressao_linha < pressao_pico_set){
+    pressaoLinha();
+    digitalWrite(valvula_exalatoria,    LOW);
+    digitalWrite(valvula_inspiratoria, HIGH);
+    delay(10);
+
+    flutuador(&pressao_linha, &pressao_pico_set, 100, 1);    
+
+    Serial.print("pico ");
+    Serial.println(pressao_linha);
+    delay(10);
+  }
+  fim_tempo_pico = millis();
+  tempo_pico = fim_tempo_pico - inicio_tempo_pico;
+  
+  if((tempo_por_ciclo - tempo_pico) > tempo_por_ciclo){ //segurana para evitar que o tpc - tp seja negativo
+    tempo_desconto_tpico = tempo_por_ciclo;
+  }
+  else{
+    tempo_desconto_tpico = tempo_por_ciclo - tempo_pico;
+  }
+  
+}
+
+void pressaoPlato(){
+  unsigned  long inicio_tempo_plato = millis();
+  if(pressao_linha > pressao_plato_set){
+    pressaoLinha();
+    digitalWrite(valvula_exalatoria,  HIGH);
+    digitalWrite(valvula_inspiratoria, LOW);
+  }
+  
+  for (int i = 1; i <= ((tempo_desconto_tpico/2) / 50); i ++){
+    
+    flutuador(&pressao_linha, &pressao_plato_set, 100, 2);    
+    
+    Serial.print(" T pico: ");
+    Serial.print(tempo_pico);
+    Serial.print(" T restante: ");
+    Serial.print(tempo_desconto_tpico);
+    Serial.print(" repetiçoes: ");
+    Serial.print((tempo_desconto_tpico/2) / 50);
+    //Serial.print(" plato ");
+    Serial.print(" P linha: ");
+    Serial.println(analogRead(press_linha));
+    delay(50);
+  }
+
+}
+
+void pressaoPeep(){
+  unsigned  long inicio_tempo_peep = millis();
+  if(pressao_linha > pressao_peep_set){
+    pressaoLinha();
+    digitalWrite(valvula_exalatoria,  HIGH);
+    digitalWrite(valvula_inspiratoria, LOW);
+  }
+ 
+  for (int i = 1; i <= ((tempo_desconto_tpico/2) / 50); i ++){
+    
+    flutuador(&pressao_linha, &pressao_peep_set, 100, 3);    
+
+    Serial.print("PEEP: ");
+    Serial.print(" P linha: ");
+    Serial.println(pressao_linha);
+    delay(50);
+  }
+
+  digitalWrite(valvula_exalatoria,  LOW);
+  tempo_pico = 0;// corrige trava em plato
+}
+
+void respirador(){
+  pressaoPico();
+  pressaoPlato();
+  pressaoPeep();
+  delay(100);
+}
+
+//-------------------------------------------------------------
+
+void setup(){
+  pinMode(valvula_exalatoria,   OUTPUT);
+  pinMode(valvula_inspiratoria, OUTPUT);
+  pinMode(press_linha, INPUT);
+  
+  Serial.begin(9600);
+}
+
+void loop(){
+  pressao_linha = analogRead(press_linha);
+  Serial.println(pressao_linha);
+  respirador();
+}
